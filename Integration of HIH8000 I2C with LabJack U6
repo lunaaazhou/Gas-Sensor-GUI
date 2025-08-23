@@ -1,0 +1,94 @@
+import u6
+import time
+
+def checkAck(numBytesSent, ackArray):
+    """
+    Name: checkAck(numBytesSent, ackArray)
+
+    Desc: Based on the number of bytes sent in the I2C command, checks if
+    the I2C response's ackArray is correct. Raises an exception if not.
+    """
+    if len(ackArray) != 4:
+        raise Exception("Invalid AckArray %s" % (ackArray))
+
+    ackValue = 0
+    for i in range(4):
+        ackValue += ackArray[i] << (i * 8)
+
+    expectedAckValue = 2 ** (numBytesSent + 1) - 1
+    if ackValue != expectedAckValue:
+        raise Exception("ACK error. Expected " + str(expectedAckValue) +
+                        ", received " + str(ackValue) +
+                        ". Make sure your LJTick-DAC has a secure connection to the LabJack.")
+
+def read_hih8000():
+    # Connect to the U6 device
+    # try:
+    d = u6.U6()  # connected to the LabJack U6 device
+    # print("✅ LabJack U6 connected successfully.")
+    # except Exception as e:
+    #     print(f"❌ Failed to connect to LabJack U6: {e}")
+    #     return
+
+    # Optional: Reset/configure device
+    d.configU6()
+
+    # I2C settings
+    I2C_ADDRESS = 0x27     # Default 7-bit address of HIH8000
+    BYTES_TO_READ = 4      # Read 4 bytes: 2 for humidity, 2 for temperature
+    SCL_PIN = 0            # Serial Clock Line -> pin0
+    SDA_PIN = 1            # Serial Data Line -> pin1
+
+    # Configure I2C bus
+    # d.i2cConfig(SCL=SCL_PIN, SDA=SDA_PIN)
+
+    # Wait for sensor to power up and become ready
+    time.sleep(0.05)  # 50 milliseconds
+
+    # Perform I2C read (no write needed before read)
+    try:
+        result = d.i2c(I2C_ADDRESS, [], [], False, False, False,
+                       0, SDA_PIN, SCL_PIN, BYTES_TO_READ)
+        time.sleep(0.05)
+
+        data = result['I2CBytes']  # list of 4 integers (0–255)
+        checkAck(0, result["AckArray"])
+
+        status = (data[0] & 0xC0) >> 6
+        print(f"Raw I2C Data: {data}")
+        print(status)
+
+    except Exception as e:
+        print(f"❌ I2C communication failed: {e}")
+        return
+
+    if len(data) != 4:
+        print("❌ Expected 4 bytes but received:", len(data))
+        return
+
+    # === Parse Humidity ===
+    # Byte 0: status bits (2) + bits 13–8 of humidity
+    # Byte 1: bits 7–0 of humidity
+    raw_humidity = ((data[0] & 0x3F) << 8) | data[1]
+    humidity = (raw_humidity / 16383.0) * 100  # scale to %RH
+
+    # === Parse Temperature ===
+    # Byte 2: bits 13–6 of temp
+    # Byte 3: bits 5–0 of temp + 2 unused bits
+    raw_temp = (data[2] << 6) | (data[3] >> 2)
+    temperature = (raw_temp / 16383.0) * 165 - 40  # scale to °C
+
+    print(f"🌡 Temperature: {temperature:.2f} °C")
+    print(f"💧 Humidity: {humidity:.2f} %RH")
+
+    # Optional: return as a dict
+    return {
+        'temperature': round(temperature, 2),
+        'humidity': round(humidity, 2)
+    }
+
+# Run the function continuously
+if __name__ == "__main__":
+    while True:
+        read_hih8000()
+        time.sleep(2)  # Poll every 2 seconds
